@@ -276,9 +276,9 @@
         enableDragScroll(container);
     }
 
-    function updateTimeButtons() {
-        console.log(`---Updating Time Buttons (Preferring ${DEFAULT_TIME_PREFERENCE})---`);
-        const container = document.getElementById("timeButtonContainer"); // Get container reference
+        function updateTimeButtons() {
+        console.log(`---Updating Time Buttons (Filtering 0800-1800, Preferring ${DEFAULT_TIME_PREFERENCE})---`); // Log change
+        const container = document.getElementById("timeButtonContainer");
          if (!container || !currentModelConfig || !currentModelConfig.plot_hours) {
              if(container) container.innerHTML = 'N/A';
              console.warn("Cannot update time buttons - container or model plot_hours missing.");
@@ -286,7 +286,7 @@
              return;
          }
         container.innerHTML = ''; // Clear existing
-        gsSelectedTime = null;
+        gsSelectedTime = null; // Reset global state before processing
 
         let dayOffset = 0;
         if (typeof gsSelectedDaySuffix !== 'undefined') {
@@ -294,36 +294,53 @@
             if (isNaN(dayOffset)) { console.warn(`Invalid gsSelectedDaySuffix ('${gsSelectedDaySuffix}') passed to updateTimeButtons. Defaulting day offset to 0.`); dayOffset = 0; }
         } else { console.warn("gsSelectedDaySuffix is undefined in updateTimeButtons. Defaulting day offset to 0."); dayOffset = 0; }
 
-        let hoursArray = [];
+        let originalHoursArray = [];
         if(currentModelConfig.plot_hours.length > dayOffset && Array.isArray(currentModelConfig.plot_hours[dayOffset].hours)) {
-            hoursArray = currentModelConfig.plot_hours[dayOffset].hours;
+            originalHoursArray = currentModelConfig.plot_hours[dayOffset].hours;
         } else { console.warn(`No plot_hours defined or invalid format for day index ${dayOffset}`); }
 
-        if (hoursArray.length === 0) {
-             container.textContent = "No times available.";
-             gsSelectedTime = null;
-             // console.log("No time buttons to add for this day."); // Less verbose
+        // *** START TIME FILTERING ***
+        const filteredHoursArray = originalHoursArray.filter(time => {
+            // Convert time string (e.g., "0900", "1400") to number for comparison
+            const timeInt = parseInt(time, 10);
+            // Check if conversion was successful and if it's within the desired range
+            return !isNaN(timeInt) && timeInt >= 800 && timeInt <= 1800;
+        });
+        console.log(`Filtered times (0800-1800): ${filteredHoursArray.join(', ')}`);
+        // *** END TIME FILTERING ***
+
+
+        // --- Use filteredHoursArray for the rest of the logic ---
+        if (filteredHoursArray.length === 0) {
+             container.textContent = "No times available (0800-1800)."; // Updated message
+             gsSelectedTime = null; // Explicitly null if no times
+             console.log("No filtered time buttons to add for this day.");
              return;
         }
 
+        // Determine the target time based on the FILTERED list
         let targetTime = null;
-        if (hoursArray.includes(DEFAULT_TIME_PREFERENCE)) {
+        // Does the preferred default time still exist after filtering?
+        if (filteredHoursArray.includes(DEFAULT_TIME_PREFERENCE)) {
             targetTime = DEFAULT_TIME_PREFERENCE;
-            // console.log(`Preferred time ${DEFAULT_TIME_PREFERENCE} is available.`); // Less verbose
-        } else if (hoursArray.length > 0) {
-            targetTime = hoursArray[0];
-            console.log(`Preferred time ${DEFAULT_TIME_PREFERENCE} not available. Defaulting to first time: ${targetTime}.`);
+            // console.log(`Preferred time ${DEFAULT_TIME_PREFERENCE} is available in filtered list.`); // Less verbose
+        } else if (filteredHoursArray.length > 0) {
+            // Fallback to the first available time IN THE FILTERED LIST
+            targetTime = filteredHoursArray[0];
+            console.log(`Preferred time ${DEFAULT_TIME_PREFERENCE} not available in filtered list. Defaulting to first filtered time: ${targetTime}.`);
         } else {
-            console.log("No times available in hoursArray.");
+            // This case should not be reached due to the length check above, but good for completeness
+            console.log("No times available in filteredHoursArray.");
         }
 
+        // Create buttons using the FILTERED list
         let timeActivated = false;
-        hoursArray.forEach(time => {
+        filteredHoursArray.forEach(time => {
             const button = document.createElement('button');
             button.type = 'button'; button.textContent = time; button.dataset.time = time;
-            if (time === targetTime) {
+            if (time === targetTime) { // Activate based on calculated targetTime
                  button.classList.add('active');
-                 gsSelectedTime = time;
+                 gsSelectedTime = time; // Set global state
                  timeActivated = true;
                  // console.log(`Activating time button: ${gsSelectedTime}`); // Less verbose
             }
@@ -331,17 +348,18 @@
             container.appendChild(button);
         });
 
+        // Fallback if targetTime logic failed (using FILTERED list)
         if (!timeActivated && container.firstChild) {
              gsSelectedTime = container.firstChild.dataset.time;
              container.firstChild.classList.add('active');
-             console.warn("Could not activate the target time button. Defaulting to first time button:", gsSelectedTime);
+             console.warn("Could not activate the target time button. Defaulting to first filtered time button:", gsSelectedTime);
         }
 
         if (!gsSelectedTime) {
-            console.warn("Finished updateTimeButtons but gsSelectedTime is still null/undefined.");
+            console.warn("Finished updateTimeButtons but gsSelectedTime is still null/undefined after filtering.");
         }
 
-         // *** NEW: Enable drag scroll on the populated container ***
+         // Enable drag scroll on the populated container (using the filtered buttons)
          enableDragScroll(container);
     }
 

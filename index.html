@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RASP Viewer (Smart)</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.5.1/dist/leaflet.css" integrity="sha512-xwE/Az9zrjBIphAcBb3F6JVqxf46+CDLwfLMHloNu6KEQCAWi6HcDUbeOfBIptF7tcCzusKFjFw2yuvEpDL9wQ==" crossorigin=""/>
+    <!-- Make sure this path is correct -->
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <noscript>
+        <h1 style="text-align: center; color: red;">This page requires JavaScript to be enabled</h1>
+    </noscript>
+
+    <div class="viewer-container-smart">
+        <!-- Top Bar -->
+        <header class="top-bar">
+            <div class="top-bar-item">
+                <label for="sModelSelect">Model:</label>
+                <select id="sModelSelect" title="Select Model"></select>
+            </div>
+            <div class="top-bar-item">
+                <label for="sParamSelect">Parameter:</label>
+                <select id="sParamSelect" title="Select Parameter"></select>
+            </div>
+            <div class="top-bar-item top-bar-item-right"></div>
+        </header>
+
+        <!-- Timeline Controls Area -->
+        <div class="timeline-controls">
+            <!-- Day Selector Group -->
+            <div class="day-selector control-group">
+                <!-- *** THIS div gets both classes *** -->
+                <div id="dayButtonContainer" class="button-group time-scroller">
+                    <!-- Day buttons will be generated here by JS -->
+                </div>
+            </div>
+            <!-- Time Selector Group -->
+            <div class="time-selector control-group">
+                 <!-- *** THIS div gets both classes *** -->
+                 <div id="timeButtonContainer" class="button-group time-scroller">
+                    <!-- Time buttons will be generated here by JS -->
+                 </div>
+            </div>
+        </div>
+
+        <!-- Main Map Area -->
+        <main class="main-view-smart">
+            <div class="title-overlay">
+                 <img id="theTitle" src="" alt="Parameter Information">
+            </div>
+            <div id="map"></div>
+            <div class="scale-overlay-side">
+                 <img id="theSideScale" src="" alt="Side Scale">
+            </div>
+            <div class="scale-overlay-bottom">
+                  <img id="theBotScale" src="" alt="Bottom Scale">
+            </div>
+            <div id="opacitySliderContainer">
+                <label for="opacitySlider" title="Layer Opacity"></label>
+                <input type="range" id="opacitySlider" min="0" max="100" step="1" value="50" title="Adjust Layer Opacity">
+            </div>
+        </main> <!-- End main-view-smart -->
+
+    </div><!-- End viewer-container-smart -->
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.5.1/dist/leaflet.js" crossorigin=""></script>
+    <!-- Ensure paths to your JS files are correct -->
+    <script src="config.js"></script>
+    <script src="main.js"></script>
+
+</body>
+</html>

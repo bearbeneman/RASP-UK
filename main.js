@@ -1,1170 +1,687 @@
-// Version 0.4
-// Darren Hatcher
+// --- START OF FILE main.js ---
+
+// Version 1.7 (Smart Controls - Desktop Drag Scroll)
 // Main JavaScript Build file
 
-	if (bNoSetSize == false ) // disable reset size functions as not needed for CMS working
-	{
-		document.body.style.overflow = "hidden"; // Disable Scrolling
-		window.onresize = function(){setSize();}
-		console.log("Using reset size functions.");
-	} else {
-		document.body.style.overflow = "visible"; // Enable Scrolling
-		console.log("Reset size functions disabled.");
-	}
-	var titleObj = document.getElementById("theTitle");
-	var sideScaleObj = document.getElementById("theSideScale");
-	var scaleObj = document.getElementById("theBotScale");
+(function() { // Wrap in an IIFE (Immediately Invoked Function Expression) to avoid polluting global scope
 
-    // Build Up Selectors
-	var gsSelectedParameter = scDefaultParameter; // to be able to stick to the last used parameter
-    
-    // Build hours supported for the model for the day
-    AddModelPeriods(scDefaultModel,0); // start of first item
-    
-    // Build parameters, based on default model selected
-	var bParamButtonState = true; // true is short, false is full
-    AddModelParameters(scDefaultModel, bParamButtonState);
+    // --- Global Variables (within IIFE scope) ---
+    var map;                    // Leaflet map instance
+    var lPlotOverlay;           // Leaflet image overlay for the forecast
+	var titleObj;               // Reference to title image element
+	var sideScaleObj;           // Reference to side scale image element
+	var scaleObj;               // Reference to bottom scale image element (used for src update)
+	var gsSelectedModel;        // Store the selected MODEL name (e.g., "UK12")
+    var gsSelectedDaySuffix;    // Store the selected DAY suffix (e.g., "", "+1", "+2")
+    var gsSelectedTime;         // Store the selected TIME string (e.g., "1200")
+    var gsSelectedParameter;    // Store the selected PARAMETER name
+    var gSoundingLayer;         // Layer group holding sounding markers
+	var gfOpacityLevel = 0.3;   // Initial opacity for the forecast overlay (0.0 to 1.0)
+    var currentModelConfig = null; // Store config for the currently selected model
+    const DEFAULT_PARAM_PREFERENCE = 'stars'; // Preferred default parameter
+    const DEFAULT_TIME_PREFERENCE = '1200';   // Preferred default time
 
-    // Build Days and models in one go
-    AddDayAndModelPeriods(scDefaultModel);
-    
-    // Get the centre
-    var aCentre = GetModelCentre(scDefaultModel);
-	
-    // Create the map
-	var map = L.map('map', {
-		center: aCentre,
-		zoomControl: true,
-		zoom: icDefaultZoom
-	});
-    
-    var gSoundingOverlay;
-    var gSoundingLayer;
-    var gMapControl;
-	var gAirfieldLayer; // for airfields 
-	var gTPLayer; // for turn points
+    // ---------------------------------------------------------------------------------------
+    // ---- Helper Function Definitions ----
+    // ---------------------------------------------------------------------------------------
 
-	if (bAirSpaceEnabled){
-		var gAirSpace_A;
-		var gAirSpace_C;
-		var gAirSpace_D;
-		var gAirSpace_E;
-		var gAirSpace_G;
-		var gAirSpace_X;
-	}
+    // =============================================
+    // == NEW: Drag Scrolling Helper Function ==
+    // =============================================
+    function enableDragScroll(slider) {
+        if (!slider) return;
 
-	var gfOpacityLevel = 0.5;
-	var gfOpacityDelta = 0.1;
-	
-	BuildMarkerLayers();
-	
-    BuildSoundingControl(scDefaultModel,"",scDefaultParameterTime);
+        let isDown = false;
+        let startX;
+        let scrollLeft;
 
-    // add scale
-    L.control.scale().addTo(map);
+        // Mouse Down: Start tracking
+        slider.addEventListener('mousedown', (e) => {
+            // Ignore if clicking on scrollbar itself or not left mouse button
+            if (e.offsetX >= slider.clientWidth - 15 || e.button !== 0) return; // Adjust 15px tolerance for scrollbar width
+            isDown = true;
+            slider.classList.add('active-drag');
+            startX = e.pageX - slider.offsetLeft;
+            scrollLeft = slider.scrollLeft;
+            // console.log("Drag Start: startX=", startX, "scrollLeft=", scrollLeft);
+        });
 
-	// set zoom control position
-	map.zoomControl.setPosition(scZoomLocation);
-    
-	// add attribution text
-    AddAttribution(L);
-	
-	// add water mark
-    AddWaterMark (L);
+        // Mouse Leave: Stop tracking if mouse leaves the element while down
+        slider.addEventListener('mouseleave', () => {
+            if (!isDown) return;
+            isDown = false;
+            slider.classList.remove('active-drag');
+            // console.log("Drag Leave");
+        });
 
-	// add opacity buttons
-	var gloPanel = AddOpacityPanel(L);
-		
-    var gAImageBounds = GetModelCorners(scDefaultModel);
-    var sDefaultURL = CreateDefaultURL(); // to get us going
+        // Mouse Up: Stop tracking (global mouseup listener is safer)
+        document.addEventListener('mouseup', (e) => { // Changed to document listener
+            if (!isDown || e.button !== 0) return;
+            isDown = false;
+            if(slider.classList.contains('active-drag')){ // Only remove if it was active
+               slider.classList.remove('active-drag');
+               // console.log("Drag End (mouseup)");
+            }
+        }, true); // Use capture phase to catch mouseup reliably
 
-	// Add the image layer to the map
-    var lPlotOverlay = L.imageOverlay(sDefaultURL, gAImageBounds,{opacity: gfOpacityLevel}).addTo(map);
-    
-    // add input handlers ...
-	document.getElementById("sTimeSelect").onchange   = UpdateOverlay;
-	document.getElementById("sParamSelect").onchange  = doParameterChange;
-	document.getElementById("sModelDaySelect").onchange  = doModelDayChange;
-	document.getElementById("btnParameterSelect").onclick  = doSwitchParamList;
-    
-	map.on('click', onMapClick); // left single click
-	map.on('contextmenu', onMapRightClick); // right single click
+        // Mouse Move: Perform the scroll
+        slider.addEventListener('mousemove', (e) => {
+            if (!isDown) return;
+            e.preventDefault(); // Prevent text selection, etc.
+            const x = e.pageX - slider.offsetLeft;
+            const walk = (x - startX) * 1.5; // Multiply for faster scroll feel (adjust 1.5 as needed)
+            slider.scrollLeft = scrollLeft - walk;
+            // console.log("Dragging: x=", x, "walk=", walk, "newScrollLeft=", slider.scrollLeft);
+        });
 
-	// default the layer control to expanded so aware what options there are
-	gMapControl.expand();
-	
-	setSize();
-	UpdateOverlay( false );
-	
-	// end of main body
-// ---------------------------------------------------------------------------------------
-function doModelDayChange()
-{
-	var sElement = document.getElementById("sModelDaySelect");
-	var sText = sElement.options[sElement.selectedIndex].value;
-	var sResult = sText.split("+");
- 
-	console.log("Clicked: "+ sElement.selectedIndex + " " +sText + "...."+sResult[0]+ "="+sResult[1]);
+         // Prevent default drag behavior on buttons/links inside if needed
+         // This helps ensure button clicks still work reliably
+        const itemsInside = slider.querySelectorAll('button, a'); // Add other clickable elements if necessary
+        itemsInside.forEach(item => {
+            item.addEventListener('dragstart', (e) => e.preventDefault());
+        });
 
-	if ( sText != "None") // i.e. it's not a list box section separator
-	{ 
-		var sRegion = sResult[0];
-		if (sResult[1] == "0")
-		{
-			var sDay = "";
-			var iHourPtr = 0;
-		} else{
-			var sDay = "+"+sResult[1];
-			var iHourPtr = sResult[1];
-		}
-
-		// need to reset the time periods in case has more or less ...
-		AddModelPeriods(sRegion,iHourPtr);
-
-		// we need to reset the supported parameters as well
-		AddModelParameters(sRegion, bParamButtonState);
-
-		var sParameterTimeElement  = document.getElementById("sTimeSelect");
-		var sParameterTimeText = sParameterTimeElement.options[sParameterTimeElement.selectedIndex].value;
-		
-		UpdateOverlay(true);
-		
-		// recentre as model/region may be different
-		var aCentre = GetModelCentre(sRegion);
-		
-		map.panTo(new L.LatLng(aCentre[0], aCentre[1]));
-
-		oaList = JSON.parse(jcFullSupportedModels);
-		for (i = 0; i< oaList.models.length; i++ )
-		{
-			if ( (oaList.models[i].enabled == true) && (oaList.models[i].name == sRegion) ){
-				// enabled and is the right one
-				// now go to default zoom
-				map.setView(aCentre, oaList.models[i].zoom);
-				break;
-			}
-		}
-
-	}
-}
-// ---------------------------------------------------------------------------------------
-function AddDayAndModelPeriods()
-{
-	    console.log("---AddDayAndModelPeriods()");
-    
-	const dayName   = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-	const monthName = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-    var i = 0;
-	var Now = new Date().getTime();	   // Time now - in milliSec(!)
-	var mS_Day = 24 * 60 * 60 * 1000;  // mS in a day
-	var T = new Date();			       // Instantiate a Date object
-    
-    oaList = JSON.parse(jcFullSupportedModels);
-    console.log("Total elements found for models: "+oaList.models.length);
-
-    // Get the selector
-    var selector = document.getElementById("sModelDaySelect");	
-    // empty the list
-    selector.options.length = 0;
-    
-    for (i = 0; i< oaList.models.length; i++ )
-    {
-        // now add the days supported
-        if ((oaList.models[i].enabled == true)){
-			console.log("Found Model Name: "+oaList.models[i].name);
-			// add the days
-			var days = oaList.models[i].days;
-			console.log("Days found: "+days+" # of days:"+days.length);
-			var sDayName = "";
-			
-			T.setTime(Now);					// Today/right now
-
-			for (j = 0; j< days.length; j++ )
-			{
-				// now work out the day/date                
-				T.setTime( Now+(mS_Day*j) );
-				sDayName = dayName[T.getDay()] + ' ' + T.getDate() + ' ' + monthName[T.getMonth()] + " - " +oaList.models[i].description;
-				
-				if (days[j] == "") // is day zero
-				{
-					var option = new Option(sDayName, oaList.models[i].name + "+0");      
-					console.log("Adding: "+sDayName+"|"+oaList.models[i].name + "+0");
-				} else 
-				{
-					console.log("Adding: "+sDayName+"|"+oaList.models[i].name + days[j]);
-					var option = new Option(sDayName, oaList.models[i].name + days[j]);      
-				}
-				
-				selector.add(option);
-				if (j == 0){ // select or highlight the first day in the list 
-					selector.options[j].selected = true;
-				}
-			}
-			selector.add(new Option("--------------------------","None"));
-            
-        } else {console.log("Skipped Model Name: "+oaList.models[i].name);}
+        console.log("Drag scroll enabled for element:", slider.id || slider.className);
     }
-    console.log("---AddDayAndModelPeriods added.");    
-}
+    // =============================================
+    // =============================================
 
-// ---------------------------------------------------------------------------------------
-function BuildSoundingControl(sModel,sDay, sTime)
-{
-    console.log("---BuildSoundingControl(sModel)");
 
-    if ( gSoundingLayer != undefined ) // has existed previously
-    {
-        gSoundingLayer.clearLayers( );
-    }
-    
-    if ( gMapControl != undefined )
-    {
-        map.removeControl(gMapControl);
-    }
-    if ( gSoundingOverlay != undefined) // has existed previously
-    {
-        map.removeLayer(gSoundingOverlay);
+    function AddAttribution() {
+        // console.log("---AddAttribution()");
+        if (typeof L === 'undefined' || !L.tileLayer) { console.error("Leaflet library (L) not available."); return; }
+        if (!scAttributionOSM || !scAttribution) { console.error("Base map URL/attribution missing."); return; }
+        L.tileLayer(scAttributionOSM, { attribution: scAttribution, subdomains: 'abc', maxZoom: 18 }).addTo(map);
+        console.log("Added base map tile layer.");
     }
 
-    // rebuild everything (note we reuse the existing layers for TPs, airfields, airspace etc.)    
-    
-	// Get the Marker Layer for the default model
-	gSoundingLayer = GetSoundingMarkers(L,sModel,sDay, sTime);
-	
-    // Add any controllable layers like maps and soundings ...
-	gMapControl = L.control.layers().addTo(map);   
-	
-	// Create the layer control, add the layers then add it to the map
-	gMapControl.addOverlay(gSoundingLayer, "Sounding/SkewT");
-	gMapControl.addOverlay(gAirfieldLayer, "Gliding Sites");
-	gMapControl.addOverlay(gTPLayer,       "BGA Turn Points"); 
-	
-	if (bAirSpaceEnabled){
-		if (gAirSpace_A != undefined) { 
-			gMapControl.addOverlay(gAirSpace_A,    "Class A"); 
-		} else {
-			console.log("Airspace A undefined - not added");
-		}
-		if (gAirSpace_C != undefined) { 
-			gMapControl.addOverlay(gAirSpace_C,    "Class C"); 
-		} else {
-			console.log("Airspace C undefined - not added");
-		}
-		if (gAirSpace_D != undefined) { 
-			gMapControl.addOverlay(gAirSpace_D,    "Class D"); 
-		} else {
-			console.log("Airspace D undefined - not added");
-		}
-		if (gAirSpace_E != undefined) { 
-			gMapControl.addOverlay(gAirSpace_E,    "Class E"); 
-		} else {
-			console.log("Airspace E undefined - not added");
-		}
-		if (gAirSpace_G != undefined) { 
-			gMapControl.addOverlay(gAirSpace_G,    "Class G"); 
-		} else {
-			console.log("Airspace G undefined - not added");
-		}
-		if (gAirSpace_X != undefined) { 
-			gMapControl.addOverlay(gAirSpace_X,    "Class X"); 
-		} else {
-			console.log("Airspace X undefined - not added");
-		}
-	}
-    console.log("+++BuildSoundingControl(sModel)");
-}
-// ---------------------------------------------------------------------------------------
-function onMapRightClick(e) {
-    
-    var aLaLo = L.latLng(e.latlng);
-    
-    console.log("Clicked the map at " + aLaLo.lat + ", "+aLaLo.lng);
-    
-	var sElement = document.getElementById("sModelDaySelect");
-	var sText = sElement.options[sElement.selectedIndex].value;
-	var sResult = sText.split("+");
- 
-	console.log("Clicked: "+ sElement.selectedIndex + " " +sText + "...."+sResult[0]+ "="+sResult[1]);
+    function GetModelCentre(sModel) {
+        // console.log("---GetModelCentre(" + sModel + ")");
+        try {
+            var oaList = JSON.parse(jcFullSupportedModels);
+            const modelConfig = oaList.models.find(m => m.enabled && m.name === sModel);
+            if (modelConfig?.centre?.length === 2) {
+                const lat = parseFloat(modelConfig.centre[0]);
+                const lon = parseFloat(modelConfig.centre[1]);
+                if (!isNaN(lat) && !isNaN(lon)) return [lat, lon];
+            }
+        } catch (e) { console.error("Error parsing models JSON (GetModelCentre):", e); }
+        console.warn(sModel + " centre not found/invalid. Using default.");
+        return [51.0, -1.0];
+    }
 
-	if ( sText != "None")
-	{ 
-		var sRegion = sResult[0];
-		if (sResult[1] == "0")
-		{
-			var sDay = "";
-		} else{
-			var sDay = sResult[1];
-		}
-			
-		var sParameterElement = document.getElementById("sParamSelect");
-		var sParameterText = sParameterElement.options[sParameterElement.selectedIndex].value;
-		
-		var sParameterTimeElement  = document.getElementById("sTimeSelect");
-		var sParameterTimeText = sParameterTimeElement.options[sParameterTimeElement.selectedIndex].value;
+    function GetModelZoom(sModel) {
+        // console.log("---GetModelZoom(" + sModel + ")");
+         try {
+            var oaList = JSON.parse(jcFullSupportedModels);
+            const modelConfig = oaList.models.find(m => m.enabled && m.name === sModel);
+            if (modelConfig && typeof modelConfig.zoom !== 'undefined') {
+                const zoom = parseInt(modelConfig.zoom, 10);
+                if (!isNaN(zoom)) return zoom;
+            }
+        } catch (e) { console.error("Error parsing models JSON (GetModelZoom):", e); }
+        return icDefaultZoom;
+    }
 
-		var sFinalParameter = sParameterText;	
-		// there are some parameters which have other data - e.g. blwind is blwindspd and blwinddir as the image name and data name are not the same
-		switch (sParameterText) {
-			case "blwind":
-				sFinalParameter = "blwindspd blwinddir";
-				break;		
-			case "wstar_bsratio":
-				sFinalParameter = "wstar bsratio";
-				break;		
-			case "sfcwind0":
-				sFinalParameter = "sfcwind0spd sfcwind0dir";
-				break;		
-			case "sfcwind":
-				sFinalParameter = "sfcwindspd sfcwinddir";
-				break;		
-			case "bltopwind":
-				sFinalParameter = "bltopwindspd bltopwinddir";
-				break;		
-			case "press1000":
-				sFinalParameter = "press1000 press1000wspd press1000wdir";
-				break;		
-			case "press950":
-				sFinalParameter = "press950 press950wspd press950wdir";
-				break;		
-			case "press850":
-				sFinalParameter = "press850 press850wspd press850wdir";
-				break;		
-			case "press700":
-				sFinalParameter = "press700 press700wspd press700wdir";
-				break;		
-			case "press500":
-				sFinalParameter = "press500 press500wspd press500wdir";
-				break;		
-			case "wind950":
-				sFinalParameter = "wind950spd wind950dir";
-				break;		
-			case "wind850":
-				sFinalParameter = "wind850spd wind850dir";
-				break;		
-			default:
-				sFinalParameter = sParameterText;
-				break;
-		}
-		
-		var sPlotURL = sForecastServerRoot + "/cgi-bin/get_rasp_blipspot_2.cgi";
-		sPlotURL = sPlotURL + "?region=" + sRegion + "&grid=d2&day=" + sDay + "&linfo=1";
-		sPlotURL = sPlotURL + "&lat=" + aLaLo.lat + "&lon=" + aLaLo.lng + "&time=" + sParameterTimeText +"lst";     
-		sPlotURL = sPlotURL + "&param=" + sFinalParameter; 
-		
-		var sContent = "<p><img src='http://app.stratus.org.uk/blip/help/app.php?region="+sRegion+"&period="+sDay+"&lat="+aLaLo.lat+"&lon="+aLaLo.lng+"&time="+sParameterTimeText+"&output=img&type="+sFinalParameter+"'>";
-		console.log("Popup URL="+sContent);
-		
-		var popup = L.popup({"minWidth":200}) 
-		.setLatLng(aLaLo)
-		.setContent(sContent)
-		.openOn(map);
-	}
-}
-// ---------------------------------------------------------------------------------------
-function onMapClick(e) {
-    console.log("Clicked the map at " + e.latlng);
-        
-    // if single click
-	DoClickUpdateOverlay();
-}
-    
-// ---------------------------------------------------------------------------------------
-function DoClickUpdateOverlay()
-{
-	// move selector forward
-    var sParameterTimeElement  = document.getElementById("sTimeSelect");
-    var sParameterTimeText = sParameterTimeElement.options[sParameterTimeElement.selectedIndex].index;
-	
-	console.log("Selector "+sParameterTimeElement.length+" "+sParameterTimeElement.selectedIndex);
-	
-	// if not the last one just increment, otherwise go to the first
-	if (sParameterTimeElement.selectedIndex < (sParameterTimeElement.length-1)){
-		sParameterTimeElement.selectedIndex = sParameterTimeElement.selectedIndex + 1;
-	} else {
-		sParameterTimeElement.selectedIndex = 0;
-	}
-	
-	UpdateOverlay(false);	
-}
-    
-// ---------------------------------------------------------------------------------------
-function doSwitchParamList()
-{
-   // change the parameter list shown to short or long
-   
-   // we need the model name for the right parameters
-	var sElement = document.getElementById("sModelDaySelect");
-	var sText = sElement.options[sElement.selectedIndex].value;
-	var sResult = sText.split("+");
-    var sRegion = sResult[0]; // ok, done
-	
-	// empty the parameter list
-	var selector = document.getElementById("sParamSelect");
-    selector.options.length = 0;
-	
-	bParamButtonState = !bParamButtonState;
-	AddModelParameters(sRegion, bParamButtonState);
-	
-	var sButtonElement  = document.getElementById("btnParameterSelect");
-	if (bParamButtonState) // short list
-	{
-		sButtonElement.innerHTML = "Switch to Full Parameter List";
-	} else {
-		sButtonElement.innerHTML = "Switch to Short Parameter List";		
-	}
-    
-}
-// ---------------------------------------------------------------------------------------
-function doParameterChange(sModel)
-{
-    console.log("---doParameterChange");
-    UpdateOverlay( false );
-	// keep a copy of what was last set
-	var sParameterElement = document.getElementById("sParamSelect");
-	gsSelectedParameter = sParameterElement.options[sParameterElement.selectedIndex].value
-}    
-// ---------------------------------------------------------------------------------------
-function UpdateOverlay(bUpdateSoundingControl)
-{
-    console.log("---UpdateOverlay");
+    function GetModelCorners(sModel) {
+        // console.log("---GetModelCorners(" + sModel + ")");
+        try {
+            var oaList = JSON.parse(jcFullSupportedModels);
+            const modelConfig = oaList.models.find(m => m.enabled && m.name === sModel);
+            if (modelConfig?.swcorner?.length === 2 && modelConfig?.necorner?.length === 2) {
+                 var swLat = parseFloat(modelConfig.swcorner[0]);
+                 var swLng = parseFloat(modelConfig.swcorner[1]);
+                 var neLat = parseFloat(modelConfig.necorner[0]);
+                 var neLng = parseFloat(modelConfig.necorner[1]);
+                 if (!isNaN(swLat) && !isNaN(swLng) && !isNaN(neLat) && !isNaN(neLng)) {
+                     return [[swLat, swLng], [neLat, neLng]];
+                 }
+            }
+        } catch (e) { console.error("Error parsing JSON (GetModelCorners):", e); }
+        console.warn(sModel + " corners not found/invalid. Using default.");
+        return [[49.4, -10.8], [59.4, 2.8]];
+    }
 
-	var sElement = document.getElementById("sModelDaySelect");
-	var sText = sElement.options[sElement.selectedIndex].value;
-	var sResult = sText.split("+");
- 
-	console.log("Clicked: "+ sElement.selectedIndex + " " +sText + "...."+sResult[0]+ "="+sResult[1]);
+    function CreateDefaultURL() {
+        if (!sForecastServerRoot || !gsSelectedModel || !gsSelectedParameter || !gsSelectedTime) {
+             console.warn(`CreateDefaultURL: Missing info - Model: ${gsSelectedModel}, Param: ${gsSelectedParameter}, Time: ${gsSelectedTime}`);
+             return null;
+        }
+        return `${sForecastServerRoot}/${gsSelectedModel}${gsSelectedDaySuffix || ''}/${gsSelectedParameter}.curr.${gsSelectedTime}lst.d2.body.png`;
+    }
 
-    var sRegion = sResult[0];
-	if (sResult[1] == "0")
-	{
-		var sDay = "";
-	} else{
-		var sDay = "+"+sResult[1];
-	}
-		
-    var sParameterTimeElement  = document.getElementById("sTimeSelect");
-    var sParameterTimeText = sParameterTimeElement.options[sParameterTimeElement.selectedIndex].value;
+    function AddModelParameters(sModel) {
+        console.log(`>>> AddModelParameters(Model=${sModel}) - Applying default preference: '${DEFAULT_PARAM_PREFERENCE}'`);
+        const paramSelector = document.getElementById("sParamSelect");
+        if (!paramSelector) { console.error("Parameter selector element ('sParamSelect') not found."); return; }
+        paramSelector.innerHTML = '';
 
-	if (bUpdateSoundingControl) { // only if there is a need to 
-		BuildSoundingControl(sRegion, sDay, sParameterTimeText);
-	}
-	
-    // set the image to the value of the various selectors
-    var sModelText = sRegion;
+        let defaultParamFound = false;
+        let firstAvailableParam = null;
+        gsSelectedParameter = null;
 
-    var sDayText = sDay;
-    
-    var sParameterElement = document.getElementById("sParamSelect");
-    var sParameterText = sParameterElement.options[sParameterElement.selectedIndex].value;
-    
-    var sParameterTimeElement  = document.getElementById("sTimeSelect");
-    var sParameterTimeText = sParameterTimeElement.options[sParameterTimeElement.selectedIndex].value;
-    
-    var sPlotURL = sForecastServerRoot + "/"+sModelText+sDayText+"/FCST/"+sParameterText +".curr."+sParameterTimeText +"lst.d2.body.png";
-    console.log ("Body="+sPlotURL);
-    
-    var sScaleURL = sForecastServerRoot + "/"+sModelText+sDayText+"/FCST/"+sParameterText +".curr."+sParameterTimeText +"lst.d2.side.png";
-    console.log("Side="+sScaleURL);
+        try {
+            if (typeof jcFullSupportedParameters === 'undefined' || typeof jcFullSupportedModels === 'undefined') {
+                 console.error("jcFullSupportedParameters or jcFullSupportedModels not defined."); paramSelector.add(new Option("Error: Config missing", "")); return;
+            }
+            var oaAllParameters = JSON.parse(jcFullSupportedParameters);
+            var paramDetails = {};
+            oaAllParameters.parameters.forEach(p => { paramDetails[p.name] = { longname: p.longname, primary: p.primary }; });
 
-    var sBottomScaleURL = sForecastServerRoot + "/"+sModelText+sDayText+"/FCST/"+sParameterText +".curr."+sParameterTimeText +"lst.d2.foot.png";
-    console.log("Bottom="+sScaleURL);
-    
-    var sTitleURL = sForecastServerRoot + "/"+sModelText+sDayText+"/FCST/"+sParameterText +".curr."+sParameterTimeText +"lst.d2.head.png";
-    console.log ("Title="+sTitleURL);
-    
-    // set bounds
-    var gAImageBounds = GetModelCorners(sModelText); //[[49.4383430, -10.7258911], [59.3545303, 2.7919922]];
-    lPlotOverlay.setBounds(gAImageBounds);
-    
-    //update image in overlay
-    lPlotOverlay.setUrl(sPlotURL);    
+            var oaModelList = JSON.parse(jcFullSupportedModels);
+             if (!currentModelConfig || currentModelConfig.name !== sModel) {
+                  currentModelConfig = oaModelList.models.find(m => m.enabled && m.name === sModel);
+             }
 
-    // repeat for header
-    var divTitle = document.getElementById("theTitle"); 
-    divTitle.src=sTitleURL;
-    divTitle.width = icMapWidth;
-    
-    // repeat for scale if different
-    var divScale= document.getElementById("theSideScale"); 
-    divScale.src=sScaleURL;
-    //divScale.height = icMapHeight;
+            if (currentModelConfig && currentModelConfig.parameters && currentModelConfig.parameters.length > 0) {
+                var optionsAdded = 0;
 
-    // repeat for scale if different
-    var divBottomScale= document.getElementById("theBotScale"); 
-    divBottomScale.src=sBottomScaleURL;
-    //divScale.height = icMapHeight;
+                currentModelConfig.parameters.forEach(paramName => {
+                    const details = paramDetails[paramName];
+                    if (details) {
+                        var option = new Option(details.longname, paramName);
+                        option.style.color = details.primary ? "blue" : "black";
+                        paramSelector.add(option);
+                        optionsAdded++;
+                        if (optionsAdded === 1) { firstAvailableParam = paramName; }
+                        if (paramName === DEFAULT_PARAM_PREFERENCE) { defaultParamFound = true; }
+                    } else { console.warn(`Details missing for parameter: ${paramName}`); }
+                });
+                console.log("Added " + optionsAdded + " parameters to dropdown.");
 
-}
-// ---------------------------------------------------------------------------------------
-function doTimeChange(sModel)
-{
-    console.log("---doTimeChange");
-    
-    UpdateOverlay(false);
-}
-// ---------------------------------------------------------------------------------------
-function AddAttribution(oMap)
-{
-    console.log("---AddAttribution(oMap)");
-     
-    // Attribution
-	oMap.tileLayer(scAttributionOSM, {
-    		attribution: scAttribution
-		}).addTo(map);
-
-}
-// ---------------------------------------------------------------------------------------
-function AddScalePanel(oMap)
-{
-    console.log("---AddScalePanel(oMap)");
-
-    // Add watermark top right
-	oMap.Control.ScalePanel = oMap.Control.extend({
-    		onAdd: function(map) {
-        		var img = oMap.DomUtil.create('img');
-
-        		img.src = scScalePanelDefault ;
-        		img.style.width = '55px';
-
-        		return img;
-    		},
-
-    		onRemove: function(map) {
-        	// Nothing to do here
-    		}
-	});
-
-	oMap.control.scalepanel = function(opts) {
-    		return new oMap.Control.ScalePanel(opts);
-	}
-
-	// Set Title Panel
-	oMap.control.scalepanel({ position: 'bottomleft' }).addTo(map);
-}
-// ---------------------------------------------------------------------------------------
-function AddWaterMark (oMap)
-{
-    console.log("---AddWaterMark (oMap)");
-
-    // Add watermark top right
-	oMap.Control.Watermark = oMap.Control.extend({
-    		onAdd: function(map) {
-        		var img = oMap.DomUtil.create('img');
-
-        		img.src = scWatermarkLogoLocation;
-        		img.style.width = '160px';
-
-        		return img;
-    		},
-
-    		onRemove: function(map) {
-        	// Nothing to do here
-    		}
-	});
-
-	oMap.control.watermark = function(opts) {
-    		return new oMap.Control.Watermark(opts);
-	}
-
-	// Set Water Mark
-	oMap.control.watermark({ position: scWaterMarkLocation }).addTo(map);
-}
-// ---------------------------------------------------------------------------------------
-function AddModelPeriods(sModel,iPeriod) // hours selector with iPeriod as the day outwards
-{
-    console.log("---AddModelPeriods for: "+sModel);
-    var i = 0;
-    
-    oaList = JSON.parse(jcFullSupportedModels);
-    
-    // get the selector to fill up
-    var time = document.getElementById("sTimeSelect");
-	
-	// Clear any there so can reset to the right number
-	document.getElementById("sTimeSelect").options.length = 0;
-	 
-    for (i = 0; i< oaList.models.length; i++ )
-    {
-        if ( (oaList.models[i].enabled == true) && (oaList.models[i].name == sModel) ){
-            console.log("Model Name: "+oaList.models[i].name + " i=" + i + " Period=" + iPeriod);
-            console.log("Total hour elements found: "+oaList.models[i].plot_hours[iPeriod].hours+ " | Element count:"+oaList.models[i].plot_hours[iPeriod].hours.length);
-            // now add the hours            
-            for (j = 0; j< oaList.models[i].plot_hours[iPeriod].hours.length; j++ ) {
-				console.log("Adding: "+oaList.models[i].plot_hours[iPeriod].hours[j]);
-				
-                time.options[j] = new Option(oaList.models[i].plot_hours[iPeriod].hours[j], oaList.models[i].plot_hours[iPeriod].hours[j]);
-                
-				if (time.options[j].value == scDefaultParameterTime){ // select or highlight the first day in the list 
-                    time.options[j].selected = true;
+                if (defaultParamFound) {
+                    paramSelector.value = DEFAULT_PARAM_PREFERENCE;
+                    gsSelectedParameter = DEFAULT_PARAM_PREFERENCE;
+                    console.log(`Default parameter set to preferred: ${gsSelectedParameter}`);
+                } else if (firstAvailableParam) {
+                    paramSelector.value = firstAvailableParam;
+                    gsSelectedParameter = firstAvailableParam;
+                    console.log(`Preferred parameter '${DEFAULT_PARAM_PREFERENCE}' not found. Defaulting to first available: ${gsSelectedParameter}`);
+                } else {
+                     paramSelector.add(new Option("N/A", ""));
+                     gsSelectedParameter = null;
+                     console.warn("No valid parameters found for model " + sModel);
                 }
+            } else { console.warn(`No parameters found/defined for model ${sModel}.`); paramSelector.add(new Option("N/A", "")); gsSelectedParameter = null; }
+        } catch (e) { console.error("Error parsing JSON in AddModelParameters:", e); paramSelector.add(new Option("Error", "")); gsSelectedParameter = null; }
+    }
+
+    function populateModelSelector() {
+        console.log("---Populating Model Selector---");
+        const selector = document.getElementById("sModelSelect");
+        if (!selector) { console.error("Element 'sModelSelect' not found."); return; }
+        selector.innerHTML = '';
+
+        try {
+            const modelData = JSON.parse(jcFullSupportedModels);
+            let foundDefault = false;
+            modelData.models.forEach(model => {
+                if (model.enabled) {
+                    const displayText = model.description || model.name;
+                    const option = new Option(displayText, model.name);
+                    selector.add(option);
+                    if (model.name === gsSelectedModel) { option.selected = true; foundDefault = true; }
+                }
+            });
+            if (!foundDefault && selector.options.length > 0) {
+                selector.selectedIndex = 0; gsSelectedModel = selector.value;
+                 console.warn(`Configured default model '${scDefaultModel}' not found or not enabled. Defaulting to first model: ${gsSelectedModel}`);
             }
-			break; // no needed to continue
-        } else { console.log("Skipping Model Name: "+oaList.models[i].name);}
+        } catch (e) { console.error("Error populating models:", e); selector.add(new Option("Error loading", "")); }
     }
 
-    console.log("---Model hour/periods added.");    
-}
-// ---------------------------------------------------------------------------------------
-function GetModelCentre(sModel)
-{
-    console.log("---GetModelCentre(sModel)");
-    var i = 0;
-    
-    oaList = JSON.parse(jcFullSupportedModels);
-    console.log("Total elements found: "+oaList.models.length);
-    
-    for (i = 0; i< oaList.models.length; i++ )
-    {
-        console.log("Model Name: "+oaList.models[i].name);
-        
-        if (oaList.models[i].name == sModel){
-            console.log("Found: "+oaList.models[i].name);
-            return oaList.models[i].centre;
+    function updateDayButtons() {
+        console.log("---Updating Day Buttons---");
+        const container = document.getElementById("dayButtonContainer"); // Get container reference
+        if (!container || !currentModelConfig || !currentModelConfig.days) {
+            if (container) container.innerHTML = 'N/A';
+            console.warn("Cannot update day buttons - container or model config/days missing."); return;
         }
-    }
-    console.log(sModel+ " not found so using centre defaults.");
-    var aDefault = [51.0, -1.0];
-    
-    return aDefault;
-}
-// ---------------------------------------------------------------------------------------
-function AddModelParameters(sModel, bStateFlag)
-{
-    console.log(">>>AddModelParameters()");
-    var i = 0;
-	var aNames = []; // used to do a lookup for the text name
-	var aPrimary = [];
-    
-    oaList = JSON.parse(jcFullSupportedModels); // this is the list of models and their settings
-    console.log("Total models found: "+oaList.models.length);
+        container.innerHTML = ''; // Clear existing
 
-    oaParameters = JSON.parse(jcFullSupportedParameters); // this is the full list, whether used by that model or not
-    console.log("Total parameters found: "+oaParameters.parameters.length);
-	for (j = 0; j< oaParameters.parameters.length; j++ )
-	{
-		aNames[oaParameters.parameters[j].name] = oaParameters.parameters[j].longname;
-		console.log("aNames[oaParameters.parameters[j].name]: "+aNames[oaParameters.parameters[j].name])
-		aPrimary[oaParameters.parameters[j].name] = oaParameters.parameters[j].primary;
-	}
-		
-    
-    // Get the selector
-    var selector = document.getElementById("sParamSelect");
+        const dayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+	    const monthName = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const Now = new Date().getTime();
+	    const mS_Day = 24 * 60 * 60 * 1000;
+	    const T = new Date();
+        let foundSelected = false;
 
-    var iPtr = 0;
-	var iShort=0;
-    for (i = 0; i< oaList.models.length; i++ )
-    {
-        console.log("Model Name: "+oaList.models[i].name+ " Enabled = "+oaList.models[i].enabled+ " Button StateFlag:"+bStateFlag+ " Number of parameters: "+oaList.models[i].parameters.length);
+        currentModelConfig.days.forEach(daySuffix => {
+            const dayOffset = (daySuffix === "") ? 0 : parseInt(daySuffix.replace('+', ''), 10);
+            if (isNaN(dayOffset)) { console.warn(`Invalid daySuffix found: ${daySuffix}`); return; }
+            T.setTime(Now + (mS_Day * dayOffset));
+            const btnText = `${dayName[T.getDay()]} ${T.getDate()} ${monthName[T.getMonth()]}`;
+            const button = document.createElement('button');
+            button.type = 'button'; button.textContent = btnText; button.title = `Day ${daySuffix || '+0'}`; button.dataset.daySuffix = daySuffix;
+            if (daySuffix === gsSelectedDaySuffix) {
+                 button.classList.add('active');
+                 foundSelected = true;
+                 // console.log(`Activating day button for suffix: '${daySuffix}'`); // Less verbose
+             }
+            button.addEventListener('click', (e) => handleDayChange(e.target.dataset.daySuffix));
+            container.appendChild(button);
+        });
 
-        if (oaList.models[i].enabled == true){ // great, we do populate
-
-			if (oaList.models[i].name == sModel) // we only want the model passed in
-			{				
-				for (j = 0; j< oaList.models[i].parameters.length; j++ )
-				{
-					console.log("Found: "+oaList.models[i].parameters[j]);						
-					// only add depending on the button state flag
-					// if the bStateFlag = true it's short list, defined as true in the "primary" field of JSON for the parameter long names
-					if (bStateFlag == true)
-					{
-						if (aPrimary[oaList.models[i].parameters[j]] == true) 
-						{
-							console.log("Adding to a short list: "+oaList.models[i].parameters[j]+"|"+aNames[oaList.models[i].parameters[j]]);
-							selector.options[iShort] = new Option(aNames[oaList.models[i].parameters[j]],oaList.models[i].parameters[j]);                       
-							if (selector.options[iShort].value == gsSelectedParameter){ // select or highlight the default
-								selector.options[iShort].selected = true;
-							}
-
-							selector.options[iShort].style.color = "blue";
-							
-							iShort++;
-						}
-					} else { // just add it as we want all the parameters
-					
-						console.log("Just adding: "+oaList.models[i].parameters[j]+"|"+aNames[oaList.models[i].parameters[j]]);
-						selector.options[j] = new Option(aNames[oaList.models[i].parameters[j]],oaList.models[i].parameters[j]);            
-						
-						if (selector.options[j].value == gsSelectedParameter){ // select or highlight the default
-							selector.options[j].selected = true;
-						}
-						if (oaParameters.parameters[j].primary == true){ // make option blue
-							selector.options[j].style.color = "blue";
-						}
-					}
-					
-				}
-			}
+        if (!foundSelected && container.firstChild) {
+            gsSelectedDaySuffix = container.firstChild.dataset.daySuffix;
+            container.firstChild.classList.add('active');
+            console.warn("Could not activate the expected day button. Defaulted day selection to first button:", gsSelectedDaySuffix);
         }
+         if (container.children.length === 0) {
+             container.textContent = "No days available.";
+             gsSelectedDaySuffix = undefined;
+         }
+
+        // *** NEW: Enable drag scroll on the populated container ***
+        enableDragScroll(container);
     }
-	if (selector.selectedIndex <= 0){ // nothing selected, so set to first item
-		selector.options[0].selected = true;
-	}
 
-    console.log("<<<Model parameters added.");    
-}
-function FindLongTextOfParameter(sShortName)
-{
+    function updateTimeButtons() {
+        console.log(`---Updating Time Buttons (Preferring ${DEFAULT_TIME_PREFERENCE})---`);
+        const container = document.getElementById("timeButtonContainer"); // Get container reference
+         if (!container || !currentModelConfig || !currentModelConfig.plot_hours) {
+             if(container) container.innerHTML = 'N/A';
+             console.warn("Cannot update time buttons - container or model plot_hours missing.");
+             gsSelectedTime = null;
+             return;
+         }
+        container.innerHTML = ''; // Clear existing
+        gsSelectedTime = null;
 
-	return "";
-}
-// ---------------------------------------------------------------------------------------
-function GetModelCorners(sModel)
-{
-    console.log("---GetModelCorners(sModel)");
-    var i = 0;
-    
-    oaList = JSON.parse(jcFullSupportedModels);
-    console.log("Total elements found: "+oaList.models.length);
-    
-    for (i = 0; i< oaList.models.length; i++ )
-    {
-        console.log("Model Name: "+oaList.models[i].name);
-        
-        if (oaList.models[i].name == sModel){
-            console.log("Found: "+oaList.models[i].name);
-            // using array of two arrays SW,NE
-            var aCorners = [ [oaList.models[i].swcorner[0],oaList.models[i].swcorner[1]], [oaList.models[i].necorner[0],oaList.models[i].necorner[1] ]];
-            console.log("Corners: "+aCorners);
-            return aCorners ;
+        let dayOffset = 0;
+        if (typeof gsSelectedDaySuffix !== 'undefined') {
+            dayOffset = (gsSelectedDaySuffix === "") ? 0 : parseInt(gsSelectedDaySuffix.replace('+', ''), 10);
+            if (isNaN(dayOffset)) { console.warn(`Invalid gsSelectedDaySuffix ('${gsSelectedDaySuffix}') passed to updateTimeButtons. Defaulting day offset to 0.`); dayOffset = 0; }
+        } else { console.warn("gsSelectedDaySuffix is undefined in updateTimeButtons. Defaulting day offset to 0."); dayOffset = 0; }
+
+        let hoursArray = [];
+        if(currentModelConfig.plot_hours.length > dayOffset && Array.isArray(currentModelConfig.plot_hours[dayOffset].hours)) {
+            hoursArray = currentModelConfig.plot_hours[dayOffset].hours;
+        } else { console.warn(`No plot_hours defined or invalid format for day index ${dayOffset}`); }
+
+        if (hoursArray.length === 0) {
+             container.textContent = "No times available.";
+             gsSelectedTime = null;
+             // console.log("No time buttons to add for this day."); // Less verbose
+             return;
         }
-    }
-    console.log(sModel+ " not found so using defaults.");
-    var aDefault = [[49.4383430, -10.7258911], [59.3545303, 2.7919922]];
-    
-    return aDefault;
-}
-// ---------------------------------------------------------------------------------------
-function CreateDefaultURL()
-{
-    return sForecastServerRoot + "/"+scDefaultModel+"/FCST/"+scDefaultParameter +".curr."+scDefaultParameterTime +"lst.d2.body.png";
-}
-// ---------------------------------------------------------------------------------------
-function GetSoundingMarkers(L,sModel,sDay, sTime)
-{
-    console.log("---GetSoundingMarkers(L,sModel)");
-    var i = 0;
-    var fLat = 0;
-    var fLon = 0; 
-    var sName = "No Name";
-	var sParameter = "sounding";
-	var oMarkers = [];
-	var iPtr = 0;
-	var sClickURL = "empty";
-	var sDetails = "empty";
-	var sContent = "empty";
-    
-    var myIcon = L.icon({
-        iconUrl: scPathToIcons+'sndmkr.png',
-        iconSize: [25, 25],
-        iconAnchor: [15, 15],
-        popupAnchor: [0, -5]
-    });
 
-    oaList = JSON.parse(jcModelSoundings);
-    console.log("Total elements found: "+oaList.soundings.length);
-	
-	var sFront = "<br><img style='width:"+scDefaultSoundingPopupSize+"='px;height:"+scDefaultSoundingPopupSize+"px' width='"+scDefaultSoundingPopupSize+"' height='"+scDefaultSoundingPopupSize+"' src='"+sForecastServerRoot;
-	var sBack = "lst.d2.png'></div>";
-		
-    for (i = 0; i< oaList.soundings.length; i++ )
-    {
-        console.log("Looking for "+sModel+". Found Model Name: "+oaList.soundings[i].model);
-        
-       if (oaList.soundings[i].model == sModel){
-            console.log("Match Found: "+oaList.soundings[i].model);            
-            for (j = 0; j < oaList.soundings[i].location.length; j++ ) {
-                fLat = oaList.soundings[i].location[j].centre[0];
-                fLon = oaList.soundings[i].location[j].centre[1];
-                sName = oaList.soundings[i].location[j].name + " "+(j+1); // this trailing number is used to identify later on for a dynamic popup
-				sDetails = oaList.soundings[i].location[j].name+ " at "+oaList.soundings[i].location[j].centre + " ("+sModel+")";
-                console.log("Found and adding ...: "+sDetails+sDay);
-                // add sounding e.g. -> http://rasp.mrsap.org/UK2/FCST/sounding7.curr.1200lst.d2.png
-				sClickURL = sDetails+sFront + "/"+sModel+sDay+"/FCST/"+sParameter+(j+1)+".curr." + sTime + sBack;
-				console.log("Adding sounding img:"+sClickURL);
-				var sClassName = sParameter +(j+1);
-				oMarkers[iPtr] = L.marker([fLat,fLon],{icon: myIcon})
-					.bindTooltip(sName)
-					.bindPopup(L.popup({maxWidth:scDefaultSoundingPopupSize})
-					);
+        let targetTime = null;
+        if (hoursArray.includes(DEFAULT_TIME_PREFERENCE)) {
+            targetTime = DEFAULT_TIME_PREFERENCE;
+            // console.log(`Preferred time ${DEFAULT_TIME_PREFERENCE} is available.`); // Less verbose
+        } else if (hoursArray.length > 0) {
+            targetTime = hoursArray[0];
+            console.log(`Preferred time ${DEFAULT_TIME_PREFERENCE} not available. Defaulting to first time: ${targetTime}.`);
+        } else {
+            console.log("No times available in hoursArray.");
+        }
 
-				oMarkers[iPtr].on('popupopen',function(e) { 
-					var sElement = document.getElementById("sModelDaySelect");
-					var sText = sElement.options[sElement.selectedIndex].value;
-					var sResult = sText.split("+");
-					var sModel = sResult[0];
-					if (sResult[1]=="0"){
-						var sDay = ""; // no +X
-					}else { 
-						var sDay = "+" + sResult[1];
-					}
-
-					var sParameterElement = document.getElementById("sParamSelect");
-					var sParameterText = sParameterElement.options[sParameterElement.selectedIndex].value;
-
-					var sParameterTimeElement  = document.getElementById("sTimeSelect");
-					var sTime = sParameterTimeElement.options[sParameterTimeElement.selectedIndex].value;
-					
-					var popup = e.target.getPopup();
-					var tooltip = e.target.getTooltip();
-					var aParam = tooltip._content.split(" "); // trailing number used - bit of a fudge
-
-					var sFront = "<img style='width:"+scDefaultSoundingPopupSize+"='px;height:"+scDefaultSoundingPopupSize+"px' width='"+scDefaultSoundingPopupSize+"' height='"+scDefaultSoundingPopupSize+"' src='"+sForecastServerRoot;
-					var sBack = "lst.d2.png'></div>";
-					
-					var sClickURL = sFront + "/"+sModel+sDay+"/FCST/sounding"+aParam[aParam.length-1]+".curr." + sTime + sBack;
-
-					popup.setContent( sClickURL );				
-				});	
-				
-				iPtr++;
+        let timeActivated = false;
+        hoursArray.forEach(time => {
+            const button = document.createElement('button');
+            button.type = 'button'; button.textContent = time; button.dataset.time = time;
+            if (time === targetTime) {
+                 button.classList.add('active');
+                 gsSelectedTime = time;
+                 timeActivated = true;
+                 // console.log(`Activating time button: ${gsSelectedTime}`); // Less verbose
             }
+            button.addEventListener('click', (e) => handleTimeChange(e.target.dataset.time));
+            container.appendChild(button);
+        });
+
+        if (!timeActivated && container.firstChild) {
+             gsSelectedTime = container.firstChild.dataset.time;
+             container.firstChild.classList.add('active');
+             console.warn("Could not activate the target time button. Defaulting to first time button:", gsSelectedTime);
         }
-	}
-    console.log("+++GetSoundingMarkers(L,sModel)");
-	
-	return L.layerGroup(oMarkers);
-}
 
-// ---------------------------------------------------------------------------------------
-function GetAirfieldMarkers(L,sModel,sTime)
-{
-    console.log("---GetAirfieldMarkers(L,sModel,sTime)");
-    var i = 0;
-    var fLat = 0;
-    var fLon = 0; 
-    var sName = "No Name";
-	var sParameter = "sounding";
-	var oMarkers = [];
-	var iPtr = 0;
-	var sClickURL = "empty";
-	var sDetails = "empty";
-	var sContent = "empty";
-    
-    var myIcon = L.icon({
-        iconUrl: scPathToIcons+'gliding-club-inv.png',
-        iconSize: [20, 20],
-        iconAnchor: [15, 15],
-        popupAnchor: [0, -5]
-    });
+        if (!gsSelectedTime) {
+            console.warn("Finished updateTimeButtons but gsSelectedTime is still null/undefined.");
+        }
 
-    oaList = JSON.parse(jcAirfieldLayer);
-    console.log("Total elements found: "+oaList.airfield.length);
-		
-    for (i = 0; i< oaList.airfield.length; i++ )
-    {
-		console.log("Looking for airfield->class->gliding. Found class Name: "+oaList.airfield[i].class);
-        
-       if (oaList.airfield[i].class == "gliding"){
-            console.log("Match Found: "+oaList.airfield[i].class);            
-            for (j = 0; j < oaList.airfield[i].location.length; j++ ) {
-                fLat = oaList.airfield[i].location[j].centre[0];
-                fLon = oaList.airfield[i].location[j].centre[1];
-                sName = oaList.airfield[i].location[j].name;
-				sDetails = oaList.airfield[i].location[j].location+ " at "+oaList.airfield[i].location[j].centre;
-                console.log("Found and adding ...: "+sDetails);
-				sClickURL = sDetails;
-				console.log("Adding:"+sClickURL);
-				oMarkers[iPtr] = L.marker([fLat,fLon],{icon: myIcon})
-					.bindTooltip(sName)
-					.bindPopup(L.popup({maxWidth:scDefaultSoundingPopupSize})
-					.setContent(sClickURL) );
-				iPtr++;
+         // *** NEW: Enable drag scroll on the populated container ***
+         enableDragScroll(container);
+    }
+
+    function GetSoundingMarkers(L, sModel, sDaySuffix, sTime) {
+        // console.log(`---GetSoundingMarkers(Model=${sModel}, DaySuffix=${sDaySuffix}, Time=${sTime})`);
+        var oMarkers = [];
+        var myIcon = L.icon({
+            iconUrl: (typeof scPathToIcons !== 'undefined' ? scPathToIcons : './') + 'sndmkr.png', // Ensure correct path
+            iconSize: [25, 25], iconAnchor: [12, 12], popupAnchor: [0, -12]
+        });
+
+        try {
+            if (typeof jcModelSoundings === 'undefined') { console.warn("jcModelSoundings not defined."); return L.layerGroup(); }
+            var oaSoundingList = JSON.parse(jcModelSoundings);
+            const modelSoundings = oaSoundingList.soundings.find(m => m.model === sModel);
+
+            if (modelSoundings?.location?.length > 0) {
+                modelSoundings.location.forEach((loc, index) => {
+                    var fLat = parseFloat(loc.centre[0]); var fLon = parseFloat(loc.centre[1]); var sName = loc.name;
+                    var soundingFileIndex = index + 1; var sTooltipText = `${sName} (Sounding ${soundingFileIndex})`;
+                    if (!isNaN(fLat) && !isNaN(fLon)) {
+                        var marker = L.marker([fLat, fLon], { icon: myIcon })
+                            .bindTooltip(sTooltipText)
+                            .bindPopup(L.popup({ maxWidth: parseInt(scDefaultSoundingPopupSize || '530', 10) + 20, minWidth: parseInt(scDefaultSoundingPopupSize || '530', 10) }).setContent("Loading sounding...") );
+                        marker.on('popupopen', function(e) {
+                            if (!gsSelectedModel || typeof gsSelectedDaySuffix === 'undefined' || !gsSelectedTime) {
+                                 console.error("Popup open error: Missing selection state.");
+                                 e.target.getPopup().setContent("Error: Cannot determine current selection."); return;
+                            }
+                            var tooltipContent = e.target.getTooltip().getContent(); var match = tooltipContent.match(/Sounding (\d+)/);
+                            var fileIndexToLoad = match ? match[1] : null; if (!fileIndexToLoad) { e.target.getPopup().setContent("Error determining sounding index."); return; }
+                            var sImageUrl = `${sForecastServerRoot}/${gsSelectedModel}${gsSelectedDaySuffix}/sounding${fileIndexToLoad}.curr.${gsSelectedTime}lst.d2.png`;
+                            var imgSize = scDefaultSoundingPopupSize || '530';
+                            var sImageTag = `<img src='${sImageUrl}' width='${imgSize}' height='${imgSize}' style='width:${imgSize}px; height:${imgSize}px; display:block; margin:auto;' alt='Sounding plot for ${sName} at ${gsSelectedTime}'>`;
+                            var sPopupContent = `<div style="text-align:center;"><b>${sName} - ${gsSelectedTime}</b>${sImageTag}</div>`;
+                            e.target.getPopup().setContent(sPopupContent);
+                        });
+                        oMarkers.push(marker);
+                    } else { console.warn(`Invalid lat/lon for sounding: ${sName}`); }
+                });
+            } //else { console.log(`No sounding locations defined for model ${sModel}`); } // Less verbose
+        } catch (e) { console.error("Error parsing jcModelSoundings JSON:", e); }
+        // console.log(`+++GetSoundingMarkers created ${oMarkers.length} markers for model ${sModel}.`); // Less verbose
+        return L.layerGroup(oMarkers);
+    }
+
+    function BuildSoundingControl(sModel, sDaySuffix, sTime) {
+        // console.log(`---BuildSoundingControl(Model=${sModel}, DaySuffix=${sDaySuffix}, Time=${sTime})`); // Less verbose
+        if (gSoundingLayer && map && map.hasLayer(gSoundingLayer)) {
+            map.removeLayer(gSoundingLayer);
+        }
+        if (gSoundingLayer) {
+            gSoundingLayer.clearLayers();
+        } else {
+            gSoundingLayer = L.layerGroup();
+        }
+        gSoundingLayer = GetSoundingMarkers(L, sModel, sDaySuffix, sTime);
+        // console.log("+++BuildSoundingControl finished (Sounding markers generated)."); // Less verbose
+    }
+
+    function UpdateOverlay(bUpdateSoundingControl) {
+        // console.log(`---UpdateOverlay (Update Soundings: ${bUpdateSoundingControl})`); // Less verbose
+        if (!gsSelectedModel || typeof gsSelectedDaySuffix === 'undefined' || !gsSelectedParameter || !gsSelectedTime) {
+             console.error(`Update Aborted: Missing state - Model: ${gsSelectedModel}, Day: '${gsSelectedDaySuffix}', Param: ${gsSelectedParameter}, Time: ${gsSelectedTime}`); return;
+        }
+        console.log(`Updating for: Model=${gsSelectedModel}, DaySuffix='${gsSelectedDaySuffix}', Param=${gsSelectedParameter}, Time=${gsSelectedTime}`);
+
+        if (bUpdateSoundingControl) {
+             BuildSoundingControl(gsSelectedModel, gsSelectedDaySuffix, gsSelectedTime);
+        }
+
+        var sBaseImagePath = `${sForecastServerRoot}/${gsSelectedModel}${gsSelectedDaySuffix}/${gsSelectedParameter}.curr.${gsSelectedTime}lst.d2`;
+        var sPlotURL = sBaseImagePath + ".body.png";
+        var sScaleURL = sBaseImagePath + ".side.png";
+        var sBottomScaleURL = sBaseImagePath + ".foot.png";
+        var sTitleURL = sBaseImagePath + ".head.png";
+
+        var gAImageBounds = GetModelCorners(gsSelectedModel);
+        if (gAImageBounds) {
+            if (lPlotOverlay && map.hasLayer(lPlotOverlay)) { // Check if layer is on map too
+                 lPlotOverlay.setBounds(gAImageBounds);
+                 lPlotOverlay.setUrl(sPlotURL);
+                 // console.log("Updated overlay URL and bounds."); // Less verbose
+            } else if (map) { // If overlay doesn't exist or not on map, create/add it
+                 if (lPlotOverlay) map.removeLayer(lPlotOverlay); // Remove if exists but wasn't on map
+                 lPlotOverlay = L.imageOverlay(sPlotURL, gAImageBounds, {
+                     opacity: gfOpacityLevel, // Use current opacity
+                     errorOverlayUrl: 'icons/error.png' // Ensure path is correct
+                    }).addTo(map);
+                 console.log("Created/Re-added forecast overlay.");
+                 initializeOpacitySlider(); // Ensure slider is linked
+            } else {
+                 console.error("Could not update map overlay - Map object not available.");
             }
+        } else { console.error("Could not update map overlay - Bounds missing."); }
+
+        if (titleObj) { titleObj.src = sTitleURL; } // else { console.warn("Title image element not found."); } // Less verbose
+        if (sideScaleObj) { sideScaleObj.src = sScaleURL; } // else { console.warn("Side scale image element not found."); }
+        if (scaleObj) { scaleObj.src = sBottomScaleURL; } // else { console.warn("Bottom scale image element not found."); }
+    }
+
+    function handleModelChange(selectedModelName) {
+        console.log("===== Model changed to:", selectedModelName, " =====");
+        if (gsSelectedModel === selectedModelName && currentModelConfig) {
+             // console.log("Model selection hasn't changed, skipping full update."); // Less verbose
+             return;
         }
-	}
-    console.log("+++GetAirfieldMarkers(L,sModel,sTime)");
-	
-	return L.layerGroup(oMarkers);
+        gsSelectedModel = selectedModelName;
 
-}
-// ---------------------------------------------------------------------------------------
-function RemoveAirfieldMarkers(oMarkers)
-{
-    console.log("---RemoveAirfieldMarkers(oMarkers)");
-    for (j = 0; j < oMarkers.length; j++ ) {
-        console.log("Removing ..."+oMarkers[j]);
-        oMarkers[j].remove();
+        try {
+             const modelData = JSON.parse(jcFullSupportedModels);
+             currentModelConfig = modelData.models.find(m => m.name === gsSelectedModel && m.enabled);
+        } catch(e) { console.error("Error finding model config:", e); currentModelConfig = null; }
+
+        if (currentModelConfig) {
+            // console.log("Found config for model:", gsSelectedModel); // Less verbose
+
+            if (currentModelConfig.days && currentModelConfig.days.length > 0) {
+                gsSelectedDaySuffix = currentModelConfig.days[0];
+                 // console.log(`Default day set to first available: '${gsSelectedDaySuffix}'`); // Less verbose
+            } else {
+                gsSelectedDaySuffix = "";
+                 console.warn(`No 'days' array found for model ${gsSelectedModel}. Defaulting day suffix to empty string.`);
+            }
+
+            AddModelParameters(gsSelectedModel);
+            updateDayButtons(); // This now calls enableDragScroll internally
+            updateTimeButtons(); // This now calls enableDragScroll internally
+
+            var aCentre = GetModelCentre(gsSelectedModel);
+            var iZoom = GetModelZoom(gsSelectedModel);
+            if (aCentre && typeof iZoom === 'number') {
+                map.setView(aCentre, iZoom);
+                // console.log(`Map view updated to center: ${aCentre}, zoom: ${iZoom}`); // Less verbose
+            } else { console.warn("Could not get center/zoom for map view update."); }
+
+            UpdateOverlay(true);
+
+        } else {
+            console.error("Could not find enabled config for model:", gsSelectedModel);
+            document.getElementById("sParamSelect").innerHTML = '<option>Select Model</option>';
+            document.getElementById("dayButtonContainer").innerHTML = 'N/A';
+            document.getElementById("timeButtonContainer").innerHTML = 'N/A';
+            if(lPlotOverlay && map) {
+                 map.removeLayer(lPlotOverlay);
+                 lPlotOverlay = null;
+                 console.log("Removed forecast overlay as model config is missing.");
+            }
+            gsSelectedParameter = null;
+            gsSelectedDaySuffix = undefined;
+            gsSelectedTime = null;
+        }
     }
-    console.log("+++RemoveAirfieldMarkers(oMarkers)");
- 
-}    
-// ---------------------------------------------------------------------------------------
-function RemoveMarkers(oMarkers)
-{
-    console.log("---RemoveMarkers(oMarkers)");
-    for (j = 0; j < oMarkers.length; j++ ) {
-        console.log("Removing ..."+oMarkers[j]);
-        oMarkers[j].remove();
+
+    function handleParameterChange(selectedParam) {
+        // console.log("Parameter changed to:", selectedParam); // Less verbose
+        if (gsSelectedParameter === selectedParam) return;
+        gsSelectedParameter = selectedParam;
+        UpdateOverlay(false);
     }
-    console.log("+++RemoveMarkers(oMarkers)");
- 
-}    
-// ---------------------------------------------------------------------------------------
-function AddOpacityPanel()
-{
-    console.log("---AddOpacityPanel()");
 
-	L.Control.OpacityPanel = L.Control.extend({
-                    
-    		onAdd: function(map) {
-        		var infopanel = L.DomUtil.create('div','opacitypanel');
-				// set the button icons and div areas
-				sText = "<div id='opacitypanelup' align='right'><button title= 'Increase Opacity' onclick=OpacityUp(); style='align=center; width: 50px; height: 38px;'><img src='higherOpacity.png'></button></div>"; 
-				sText = sText + "<div id='opacitypaneldn' align='right'><button title= 'Decrease Opacity' onclick=OpacityDn(); style='align=center; width: 50px; height: 38px;'><img src='lowerOpacity.png'></button></div>"; 
-        		infopanel.innerHTML = sText;
-        		infopanel.style.width = '100px';
-        		infopanel.style.height = '80px';
+    function handleDayChange(selectedDaySuffix) {
+        // console.log("Day changed to:", selectedDaySuffix); // Less verbose
+        if (gsSelectedDaySuffix === selectedDaySuffix) return;
+        gsSelectedDaySuffix = selectedDaySuffix;
 
-				infopanel.onclick = function( ev ){
-					console.log("infopanel.onclick = function() - stop cascade.");
-					L.DomEvent.stopPropagation(ev);
-				}
-				
-				return infopanel;
-    		},
+        const container = document.getElementById("dayButtonContainer");
+        if (container) {
+            container.querySelectorAll('button').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.daySuffix === gsSelectedDaySuffix);
+            });
+        }
+        updateTimeButtons(); // Re-apply time defaults and enable drag scroll for new times
+        UpdateOverlay(true); // Update overlay and soundings
+    }
 
-    		onRemove: function(map) {
-        	// Nothing to do here
-    		},
-    		
-			updateOpacity: function (value) {
-				lPlotOverlay.setOpacity(value);
-			}
-    		
-	});
+    function handleTimeChange(selectedTime) {
+        // console.log("Time changed to:", selectedTime); // Less verbose
+         if (gsSelectedTime === selectedTime) return;
+        gsSelectedTime = selectedTime;
 
-    
-	var gloPanel = function(opts) {
-    		return new L.Control.OpacityPanel(opts);
-	}
+        const container = document.getElementById("timeButtonContainer");
+         if (container) {
+             container.querySelectorAll('button').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.time === gsSelectedTime);
+             });
+         }
+        UpdateOverlay(false); // Only image update needed
+    }
 
-	// Set Title Panel
-	gloPanel({ position: scOpacityLocation }).addTo(map);
-    
-    console.log("+++AddOpacityPanel()");
-    return gloPanel;
+    function onMapClick(e) {
+        // console.log("Map clicked at", e.latlng); // Less verbose
+    }
 
-}
-// ---------------------------------------------------------------------------------------
-function OpacityUp(e)
-{
-	gfOpacityLevel = gfOpacityLevel + gfOpacityDelta;
+    function DoClickUpdateOverlay() { // Called by onMapClick if uncommented
+        var timeButtonContainer = document.getElementById("timeButtonContainer");
+        if (!timeButtonContainer) return;
+        var buttons = timeButtonContainer.querySelectorAll('button');
+        if (buttons.length <= 1) return;
+        let currentIndex = -1;
+        buttons.forEach((btn, index) => { if(btn.classList.contains('active')) currentIndex = index; });
+        let nextIndex = (currentIndex >= 0 && currentIndex < buttons.length - 1) ? currentIndex + 1 : 0;
+        if (buttons[nextIndex]) handleTimeChange(buttons[nextIndex].dataset.time);
+    }
 
-	if (gfOpacityLevel < 1.0) {
-		gloPanel().updateOpacity(gfOpacityLevel);
-	} else {
-		gfOpacityLevel = 1.0; // stop going higher
-	}
-	
-	console.log("Level="+gfOpacityLevel);
-}
-// ---------------------------------------------------------------------------------------
-function OpacityDn(e)
-{
-	gfOpacityLevel = gfOpacityLevel - gfOpacityDelta;
-	if (gfOpacityLevel > 0.0) {
-		gloPanel().updateOpacity(gfOpacityLevel);
-	} else {
-		gfOpacityLevel = 0.0; // stop going lower
-	}
+    function initializeOpacitySlider() {
+        const opacitySlider = document.getElementById('opacitySlider');
+        const opacityValueSpan = document.getElementById('opacityValue');
 
-	console.log("Level="+gfOpacityLevel);
-}
-// ---------------------------------------------------------------------------------------
-function BuildMarkerLayers()
-{	
-	// Set the gliding club markers
-	gAirfieldLayer = GetAirfieldMarkers(L,scDefaultModel,scDefaultParameterTime); 
-	
-	// --------------------------------------------------------------------
-	// Set the BGA TP markers
-	let xhr = new XMLHttpRequest();
-	xhr.open('GET', scTPJSONFile);
-	xhr.setRequestHeader('Content-Type', 'application/json');
-	xhr.responseType = 'json';
+        if (!opacitySlider) {
+             console.warn("Could not initialize opacity slider: Slider element not found.");
+             return;
+        }
+        // Set initial visual state
+        const initialSliderValue = Math.round(gfOpacityLevel * 100);
+        opacitySlider.value = initialSliderValue;
+        if(opacityValueSpan) opacityValueSpan.textContent = `${initialSliderValue}%`;
 
-	gTPLayer = new L.LayerGroup();
-	
-	xhr.onload = function() {
-		if (xhr.status !== 200) return
-		gTPGeoJson = L.geoJson(xhr.response, {
-		  style: style,
-		  onEachFeature: onEachTPFeature
-		}).addTo(gTPLayer);
-		console.log("---Added GeoJSON BGA TP elements");
-	};		
-	xhr.send();	
-	
-	if (bAirSpaceEnabled){
-		// --------------------------------------------------------------------
-		// Set the Class A markers
-		var sFileName = GetAirspaceFileName("A");	
-		if (sFileName != "") // we have a filename to load
-		{	
-			console.log("Using airspace JSON file of: "+sFileName)
-			let xhra = new XMLHttpRequest();
-			xhra.open('GET', scCDNURL + sFileName);
-			xhra.setRequestHeader('Content-Type', 'application/json');
-			xhra.responseType = 'json';
+        // Ensure only one listener
+        opacitySlider.removeEventListener('input', handleOpacityInput);
+        opacitySlider.addEventListener('input', handleOpacityInput);
 
-			gAirSpace_A = new L.LayerGroup();
-			
-			xhra.onload = function() {
-				if (xhra.status !== 200) return
-				gGeoJsonA = L.geoJson(xhra.response, {
-				  style: AirSpaceStyle,
-				  onEachFeature: onEachClassFeature
-				}).addTo(gAirSpace_A);
-				console.log("---Added GeoJSON gAirSpace_A elements");
-			};		
-			xhra.send();	
-		} else { console.log("Airspace A JSON filename empty"); gAirSpace_A = undefined; }
-		// --------------------------------------------------------------------
-		// Set the Class C markers
-		sFileName = GetAirspaceFileName("C");	
-		if (sFileName != "") // we have a filename to load
-		{	
-			let xhrc = new XMLHttpRequest();
-			xhrc.open('GET', scCDNURL + sFileName);
-			xhrc.setRequestHeader('Content-Type', 'application/json');
-			xhrc.responseType = 'json';
+        // Apply opacity if overlay already exists (e.g., on page load after init)
+        if (lPlotOverlay && map.hasLayer(lPlotOverlay)) {
+            lPlotOverlay.setOpacity(gfOpacityLevel);
+            console.log("Opacity slider initialized and linked to existing overlay.");
+        } else {
+             console.log("Opacity slider initialized visually.");
+        }
+    }
+    // Handler for opacity input
+    function handleOpacityInput(event) {
+        const sliderValue = event.target.value;
+        const newOpacity = sliderValue / 100;
+        const opacityValueSpan = document.getElementById('opacityValue');
+        gfOpacityLevel = newOpacity; // Update global state
+        if (lPlotOverlay && map.hasLayer(lPlotOverlay)) { // Apply to overlay if it exists and is on map
+            lPlotOverlay.setOpacity(newOpacity);
+        }
+        if(opacityValueSpan) opacityValueSpan.textContent = `${sliderValue}%`;
+    }
 
-			gAirSpace_C = new L.LayerGroup();
-			
-			xhrc.onload = function() {
-				if (xhrc.status !== 200) return
-				gGeoJsonC = L.geoJson(xhrc.response, {
-				  style: AirSpaceStyle,
-				  onEachFeature: onEachClassFeature
-				}).addTo(gAirSpace_C);
-				console.log("---Added GeoJSON gAirSpace_C elements");
-			};		
-			xhrc.send();	
-		} else { console.log("Airspace C JSON file name empty"); gAirSpace_C = undefined; }
-		// --------------------------------------------------------------------
-		// Set the Class D markers
-		sFileName = GetAirspaceFileName("D");	
-		if (sFileName != "") // we have a file name to load
-		{	
-			let xhrd = new XMLHttpRequest();
-			xhrd.open('GET', scCDNURL + sFileName);
-			xhrd.setRequestHeader('Content-Type', 'application/json');
-			xhrd.responseType = 'json';
+    function BuildMarkerLayers() {
+        // console.log("---BuildMarkerLayers() - Simplified (No non-sounding layers loaded)"); // Less verbose
+        // console.log("---BuildMarkerLayers finished initiation (no layers added)."); // Less verbose
+    }
 
-			gAirSpace_D = new L.LayerGroup();
-			
-			xhrd.onload = function() {
-				if (xhrd.status !== 200) return
-				gGeoJsonD = L.geoJson(xhrd.response, {
-				  style: AirSpaceStyle,
-				  onEachFeature: onEachClassFeature
-				}).addTo(gAirSpace_D);
-				console.log("---Added GeoJSON gAirSpace_D elements");
-			};		
-			xhrd.send();
-		} else { console.log("Airspace D JSON file name empty"); gAirSpace_D = undefined; }
+    function addEventListeners() {
+        // console.log("---Adding Event Listeners---"); // Less verbose
+        const modelSelect = document.getElementById("sModelSelect");
+        const paramSelect = document.getElementById("sParamSelect");
 
-		// --------------------------------------------------------------------
-		// Set the Class E markers
-		sFileName = GetAirspaceFileName("E");	
-		if (sFileName != "") // we have a file name to load
-		{	
-			let xhre = new XMLHttpRequest();
-			xhre.open('GET', scCDNURL + 'class_e.json');
-			xhre.setRequestHeader('Content-Type', 'application/json');
-			xhre.responseType = 'json';
+        if (modelSelect) {
+            modelSelect.removeEventListener('change', handleModelSelectChange);
+            modelSelect.addEventListener('change', handleModelSelectChange);
+            // console.log("Added listener for Model select."); // Less verbose
+        } else { console.warn("Model select element not found for listener."); }
 
-			gAirSpace_E = new L.LayerGroup();
-			
-			xhre.onload = function() {
-				if (xhre.status !== 200) return
-				gGeoJsonE = L.geoJson(xhre.response, {
-				  style: AirSpaceStyle,
-				  onEachFeature: onEachClassFeature
-				}).addTo(gAirSpace_E);
-				console.log("---Added GeoJSON gAirSpace_E elements");
-			};		
-			xhre.send();	
-		} else { console.log("Airspace E JSON file name empty"); gAirSpace_E = undefined; }
-		// --------------------------------------------------------------------
-		// Set the Class G markers
-		sFileName = GetAirspaceFileName("G");	
-		if (sFileName != "") // we have a file name to load
-		{	
-			let xhrg = new XMLHttpRequest();
-			xhrg.open('GET', scCDNURL + 'class_g.json');
-			xhrg.setRequestHeader('Content-Type', 'application/json');
-			xhrg.responseType = 'json';
+        if (paramSelect) {
+            paramSelect.removeEventListener('change', handleParamSelectChange);
+            paramSelect.addEventListener('change', handleParamSelectChange);
+             // console.log("Added listener for Parameter select."); // Less verbose
+        } else { console.warn("Parameter select element not found for listener."); }
 
-			gAirSpace_G = new L.LayerGroup();
-			
-			xhrg.onload = function() {
-				if (xhrg.status !== 200) return
-				gGeoJsonG = L.geoJson(xhrg.response, {
-				  style: AirSpaceStyle,
-				  onEachFeature: onEachClassFeature
-				}).addTo(gAirSpace_G);
-				console.log("---Added GeoJSON gAirSpace_G elements");
-			};		
-			xhrg.send();	
-		} else { console.log("Airspace G JSON file name empty"); gAirSpace_G = undefined; }
+        if (map) {
+            map.off('click', onMapClick).on('click', onMapClick); // Keep map click listener
+            // console.log("Added listener for Map click."); // Less verbose
+        } else { console.warn("Map object not found for listener."); }
+    }
+    // Wrapper functions for event listeners remain the same
+    function handleModelSelectChange(e) { handleModelChange(e.target.value); }
+    function handleParamSelectChange(e) { handleParameterChange(e.target.value); }
 
-		// --------------------------------------------------------------------
-		// Set the Class X markers
-		sFileName = GetAirspaceFileName("X");	
-		if (sFileName != "") // we have a file name to load
-		{			
-			let xhrx = new XMLHttpRequest();
-			xhrx.open('GET', scCDNURL + 'class_x.json');
-			xhrx.setRequestHeader('Content-Type', 'application/json');
-			xhrx.responseType = 'json';
 
-			gAirSpace_X = new L.LayerGroup();
-			
-			xhrx.onload = function() {
-				if (xhrx.status !== 200) return
-				gGeoJsonX = L.geoJson(xhrx.response, {
-				  style: AirSpaceStyle,
-				  onEachFeature: onEachClassFeature
-				}).addTo(gAirSpace_X);
-				console.log("---Added GeoJSON gAirSpace_X elements");
-			};		
-			xhrx.send();	
-		} else { console.log("Airspace X JSON file name empty"); gAirSpace_X = undefined; }
-		// --------------------------------------------------------------------
-	}
-}
-// ---------------------------------------------------------------------------------------
-function GetAirspaceFileName(sClass)
-{
-   console.log(">>>GetAirspaceFilename(sClass)");	
-   var sResponse = "";
-   
-	var oaList = JSON.parse(jcAirSpaceFileNameList);
-    console.log("Airspace total elements found: "+oaList.airspace.length);
+    // ---------------------------------------------------------------------------------------
+    // ---- Initialization Function ---- (Definition)
+    // ---------------------------------------------------------------------------------------
+     function initializeViewer() {
+        console.log("===== Initializing RASP Viewer v1.7 =====");
+        // Config checks...
+        if (typeof scDefaultModel === 'undefined' || typeof sForecastServerRoot === 'undefined' || typeof jcFullSupportedModels === 'undefined' || typeof jcFullSupportedParameters === 'undefined') {
+            console.error("Essential configuration missing. Cannot load.");
+            alert("Viewer configuration error. Cannot load."); return;
+        }
+        gsSelectedModel = scDefaultModel;
+        console.log(`Initial target model set to: ${gsSelectedModel}`);
 
-    for (var i = 0; i< oaList.airspace.length; i++ )
-    {
-		console.log("Looking for class "+sClass+". Found class: "+oaList.airspace[i].name);
-        if (sClass == oaList.airspace[i].name) {
-			console.log("Match Found: "+oaList.airspace[i].name+ " Filename:"+ oaList.airspace[i].filename);            			
-			if (oaList.airspace[i].enabled == true)  {
-				console.log("Is enabled: "+oaList.airspace[i].name);      
-				sResponse = oaList.airspace[i].filename; // assumes is in there and correct
-				break;
-			} else {
-				// found but disabled
-			}
-		}
-	}
+        // Image element refs...
+        titleObj = document.getElementById("theTitle");
+        sideScaleObj = document.getElementById("theSideScale");
+        scaleObj = document.getElementById("theBotScale");
+        if (!titleObj || !sideScaleObj || !scaleObj) console.warn("One or more image display elements not found.");
 
-	if (sResponse == "" ){
-		console.log("No match found for:"+sClass);
-	}
-    console.log("<<<GetAirspaceFilename(sClass)");	
-	
-	return sResponse; // is empty if not found or disabled
-}
-// ---------------------------------------------------------------------------------------
+        // Map initialization...
+        var aCentre = GetModelCentre(gsSelectedModel);
+        var initialZoom = GetModelZoom(gsSelectedModel);
+        if (!aCentre) { console.error("Could not get map centre. Aborting."); return; }
+        try {
+            map = L.map('map', { center: aCentre, zoom: initialZoom, zoomControl: true });
+            // Position zoom control if specified, otherwise Leaflet default (topleft)
+            if (map.zoomControl && typeof scZoomLocation !== 'undefined') map.zoomControl.setPosition(scZoomLocation);
+            // Add scale control if specified
+            if (typeof scScaleLocation !== 'undefined') L.control.scale({ position: scScaleLocation }).addTo(map);
+            AddAttribution();
+            console.log("Map initialized.");
+        } catch (e) {
+            console.error("Leaflet map initialization failed:", e);
+            document.getElementById('map').innerHTML = '<p style="color: red; text-align: center; margin-top: 20px;">Error initializing map. Check console.</p>';
+            return;
+        }
+
+        // Populate Model Selector...
+        populateModelSelector();
+
+        // Trigger initial setup using defaults...
+        // handleModelChange now calls updateDayButtons/updateTimeButtons, which in turn call enableDragScroll
+        handleModelChange(gsSelectedModel);
+
+        // Build Static Marker Layers...
+        BuildMarkerLayers();
+
+        // Initialize UI Controls...
+        initializeOpacitySlider(); // Initialize the always-visible slider
+        addEventListeners(); // Setup listeners
+
+        // Final check... (optional, but good practice)
+        if (!lPlotOverlay && gsSelectedModel && gsSelectedParameter && gsSelectedTime && map) {
+             console.warn("Initial handleModelChange didn't seem to create the overlay, attempting fallback UpdateOverlay.");
+             UpdateOverlay(true);
+         } else if (lPlotOverlay) {
+             console.log("Initial forecast overlay confirmed or created by handleModelChange.");
+         }
+
+        console.log("===== RASP Viewer Initialization Complete =====");
+    }
+
+	// --- DOMContentLoaded Event Listener ---
+	// Ensures the DOM is ready before running the initialization code
+	document.addEventListener('DOMContentLoaded', initializeViewer);
+
+}()); // End of IIFE
+
+// --- END OF FILE main.js ---
